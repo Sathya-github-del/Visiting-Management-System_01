@@ -327,7 +327,7 @@ const formatDateTime = (date) => {
 };
 
 // Add this near other utility functions
-const SMS8Service = require('./utils/sms');
+const SMS8Service = require('./sms');
 const smsService = new SMS8Service(process.env.SMS_API_KEY);
 
 // Update the sendSMS function
@@ -636,7 +636,7 @@ app.patch('/api/visitors/:id/status', async (req, res) => {
                 subject: `Visit Request ${status.charAt(0).toUpperCase() + status.slice(1)}`,
                 html: `
                     <h2>Visit Request ${status.charAt(0).toUpperCase() + status.slice(1)}</h2>
-                    <p>Your visit request for ${visitor.visitDate} at ${visitor.visitTime} has been ${status} by ${visitor.visitingMember}.</p>
+                    <p>Your visit request for ${visitor.visitDate} at ${visitor.visitTime} has been ${status}.</p>
                     ${status === 'approved' ? '<p>Please proceed to the reception desk at the scheduled time.</p>' : ''}
                 `
             };
@@ -915,7 +915,7 @@ app.get('/api/result/:action/:id', async (req, res) => {
         });
 
         // Send SMS notification
-        const smsMessage = `DynPro India: Your visit request for ${visitor.visitDate} has been ${status} by ${visitor.visitingMember}.`
+        const smsMessage = `DynPro India: Your visit request for ${visitor.visitDate} has been ${status}.` +
             (status === 'approved'
                 ? ' Please proceed to check-In.'
                 : ' Please contact the person for more information.');
@@ -1068,213 +1068,214 @@ app.get('/api/result/:action/:id', async (req, res) => {
         });
 
         // Send SMS notification
-        //         const smsMessage = `DynPro India: Your visit request for ${visitor.visitDate} has been ${status}. ${status === 'approved'
-        //             ? 'Please proceed to reception at the scheduled time.'
-        //             : 'Please contact the person for more information.'
-        //             }`;
+        const smsMessage = `DynPro India: Your visit request for ${visitor.visitDate} has been ${status}. ${status === 'approved'
+            ? 'Please proceed to reception at the scheduled time.'
+            : 'Please contact the person for more information.'
+            }`;
 
-        //         try {
-        //             const smsSent = await sendSMS(visitor.phone, smsMessage);
-        //             if (smsSent) {
-        //                 console.log('SMS notification sent successfully to:', visitor.phone);
-        //             } else {
-        //                 console.error('Failed to send SMS notification');
-        //             }
-        //         } catch (smsError) {
-        //             console.error('SMS sending error:', smsError);
-        //             // Continue execution even if SMS fails
-        //         }
-
-        //         res.send(`
-        //             <html>
-        //                 <head>
-        //                     <style>
-        //                         body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-        //                         h1 { color: ${status === 'approved' ? '#4CAF50' : '#f44336'}; }
-        //                     </style>
-        //                 </head>
-        //                 <body>
-        //                     <h1>Visit Request ${status.toUpperCase()}</h1>
-        //                     <p>You have successfully ${status} the visit request.</p>
-        //                     <p>You can close this window now.</p>
-        //                 </body>
-        //             </html>
-        //         `);
-        //     } catch (error) {
-        //         console.error('Error processing approval/rejection:', error);
-        //         res.status(500).send('Error processing your request');
-        //     }
-        // });
-
-        // Add DELETE route for visitors
-        app.delete('/api/visitors/:id', async (req, res) => {
-            try {
-                const visitor = await Visitor.findByIdAndDelete(req.params.id);
-
-                if (!visitor) {
-                    return res.status(404).json({
-                        success: false,
-                        message: 'Visitor not found'
-                    });
-                }
-
-                // Broadcast deletion to all clients
-                broadcastUpdate({
-                    type: 'VISITOR_DELETED',
-                    visitorId: visitor._id.toString()
-                });
-
-                res.json({
-                    success: true,
-                    message: 'Visitor deleted successfully'
-                });
-            } catch (error) {
-                res.status(500).json({
-                    success: false,
-                    message: 'Error deleting visitor',
-                    error: error.message
-                });
+        try {
+            const smsSent = await sendSMS(visitor.phone, smsMessage);
+            if (smsSent) {
+                console.log('SMS notification sent successfully to:', visitor.phone);
+            } else {
+                console.error('Failed to send SMS notification');
             }
-        });
+        } catch (smsError) {
+            console.error('SMS sending error:', smsError);
+            // Continue execution even if SMS fails
+        }
 
-        // Update the get visitor by phone route to handle errors better
-        app.get('/api/visitors/phone/:phone', async (req, res) => {
-            try {
-                const phoneNumber = req.params.phone;
-                console.log('Fetching visitor with phone:', phoneNumber);
+        res.send(`
+            <html>
+                <head>
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+                        h1 { color: ${status === 'approved' ? '#4CAF50' : '#f44336'}; }
+                    </style>
+                </head>
+                <body>
+                    <h1>Visit Request ${status.toUpperCase()}</h1>
+                    <p>You have successfully ${status} the visit request.</p>
+                    <p>You can close this window now.</p>
+                </body>
+            </html>
+        `);
+    } catch (error) {
+        console.error('Error processing approval/rejection:', error);
+        res.status(500).send('Error processing your request');
+    }
+});
 
-                if (!phoneNumber || phoneNumber.length !== 10) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Invalid phone number format'
-                    });
-                }
+// Add DELETE route for visitors
+app.delete('/api/visitors/:id', async (req, res) => {
+    try {
+        const visitor = await Visitor.findByIdAndDelete(req.params.id);
 
-                const visits = await Visitor.find({
-                    phone: phoneNumber,
-                    status: 'completed'
-                })
-                    .sort({ createdAt: -1 })
-                    .limit(5)
-                    .lean();  // Use lean() for better performance
-
-                if (!visits || visits.length === 0) {
-                    return res.status(404).json({
-                        success: false,
-                        message: 'No previous visits found with this phone number'
-                    });
-                }
-
-                // Format the response with proper error handling for photo conversion
-                const formattedVisits = visits.map(visit => {
-                    let photoUrl = null;
-                    if (visit.photo && visit.photo.data && visit.photo.contentType) {
-                        try {
-                            photoUrl = `data:${visit.photo.contentType};base64,${visit.photo.data.toString('base64')}`;
-                        } catch (error) {
-                            console.error('Error converting photo:', error);
-                        }
-                    }
-
-                    return {
-                        id: visit._id,
-                        fullname: visit.fullname || '',
-                        email: visit.email || '',
-                        phone: visit.phone || '',
-                        purpose: visit.purpose || '',
-                        visitingMember: visit.visitingMember || '',
-                        status: visit.status || '',
-                        visitDate: visit.visitDate || '',
-                        visitTime: visit.visitTime || '',
-                        photoUrl: photoUrl
-                    };
-                });
-
-                res.json({
-                    success: true,
-                    visits: formattedVisits
-                });
-            } catch (error) {
-                console.error('Error fetching visitor history:', error);
-                res.status(500).json({
-                    success: false,
-                    message: 'Error fetching visitor history',
-                    error: error.message
-                });
-            }
-        });
-
-        // Error handling middleware
-        app.use((err, req, res, next) => {
-            console.error(err.stack);
-            res.status(500).json({
+        if (!visitor) {
+            return res.status(404).json({
                 success: false,
-                message: 'Something went wrong!',
-                error: err.message
+                message: 'Visitor not found'
             });
+        }
+
+        // Broadcast deletion to all clients
+        broadcastUpdate({
+            type: 'VISITOR_DELETED',
+            visitorId: visitor._id.toString()
         });
 
-        const PORT = process.env.PORT || 5000;
-        const HOST = '0.0.0.0'; // Listen on all network interfaces
+        res.json({
+            success: true,
+            message: 'Visitor deleted successfully'
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Error deleting visitor',
+            error: error.message
+        });
+    }
+});
 
-        // Update the server.listen section
-        server.listen(PORT, HOST, () => {
-            console.log(`\nServer running at http://${HOST}:${PORT}`);
-            console.log('\nServer Configuration:');
+// Update the get visitor by phone route to handle errors better
+app.get('/api/visitors/phone/:phone', async (req, res) => {
+    try {
+        const phoneNumber = req.params.phone;
+        console.log('Fetching visitor with phone:', phoneNumber);
 
-            const serverConfig = getServerConfig();
-            if (serverConfig.isMainServer) {
-                console.log('Running as MAIN SERVER');
-                console.log('Main Servers:');
-                serverConfig.mainServers.forEach(server => {
-                    console.log(`- ${server.ip} -> ${server.url}`);
-                });
-            } else {
-                console.log('Running as SECONDARY SERVER');
-                console.log('Connected to Main Servers:');
-                serverConfig.mainServers.forEach(server => {
-                    console.log(`- ${server.url}`);
-                });
+        if (!phoneNumber || phoneNumber.length !== 10) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid phone number format'
+            });
+        }
+
+        const visits = await Visitor.find({
+            phone: phoneNumber,
+            status: 'completed'
+        })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .lean();  // Use lean() for better performance
+
+        if (!visits || visits.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'No previous visits found with this phone number'
+            });
+        }
+
+        // Format the response with proper error handling for photo conversion
+        const formattedVisits = visits.map(visit => {
+            let photoUrl = null;
+            if (visit.photo && visit.photo.data && visit.photo.contentType) {
+                try {
+                    photoUrl = `data:${visit.photo.contentType};base64,${visit.photo.data.toString('base64')}`;
+                } catch (error) {
+                    console.error('Error converting photo:', error);
+                }
             }
 
-            // ...rest of existing logging...
+            return {
+                id: visit._id,
+                fullname: visit.fullname || '',
+                email: visit.email || '',
+                phone: visit.phone || '',
+                purpose: visit.purpose || '',
+                visitingMember: visit.visitingMember || '',
+                status: visit.status || '',
+                visitDate: visit.visitDate || '',
+                visitTime: visit.visitTime || '',
+                photoUrl: photoUrl
+            };
         });
 
-        // Add static file serving for frontend
-        const frontendPath = path.join(__dirname, '..', 'v2.0', 'dist');
-        app.use(express.static(frontendPath));
-
-        // Add catch-all route for SPA
-        app.get('*', (req, res, next) => {
-            if (req.url.startsWith('/api')) {
-                return next();
-            }
-            res.sendFile(path.join(frontendPath, 'index.html'));
+        res.json({
+            success: true,
+            visits: formattedVisits
         });
+    } catch (error) {
+        console.error('Error fetching visitor history:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching visitor history',
+            error: error.message
+        });
+    }
+});
 
-        // Update WebSocket configuration to connect to main server if this is a secondary server
-        const setupWebSocket = () => {
-            const serverConfig = getServerConfig();
+// Error handling middleware
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({
+        success: false,
+        message: 'Something went wrong!',
+        error: err.message
+    });
+});
 
-            if (serverConfig.isMainServer) {
-                // Main server handles incoming connections
-                wss.on('connection', (ws, req) => {
-                    const clientIp = getClientIp(req);
-                    console.log(`Client connected from IP: ${clientIp}`);
-                    // ...existing code...
-                });
-            } else {
-                // Connect to all main servers for redundancy
-                serverConfig.mainServers.forEach(mainServer => {
-                    const connectToMainServer = () => {
-                        const mainServerWs = new WebSocket(mainServer.url.replace('http', 'ws'));
-                    };
-                    connectToMainServer();
-                });
-            }
-        };
-        // 
-        // Call setupWebSocket after server starts
-        setupWebSocket();
+const PORT = process.env.PORT || 5000;
+const HOST = '0.0.0.0'; // Listen on all network interfaces
 
-        module.exports = app;
+// Update the server.listen section
+server.listen(PORT, HOST, () => {
+    console.log(`\nServer running at http://${HOST}:${PORT}`);
+    console.log('\nServer Configuration:');
+
+    const serverConfig = getServerConfig();
+    if (serverConfig.isMainServer) {
+        console.log('Running as MAIN SERVER');
+        console.log('Main Servers:');
+        serverConfig.mainServers.forEach(server => {
+            console.log(`- ${server.ip} -> ${server.url}`);
+        });
+    } else {
+        console.log('Running as SECONDARY SERVER');
+        console.log('Connected to Main Servers:');
+        serverConfig.mainServers.forEach(server => {
+            console.log(`- ${server.url}`);
+        });
+    }
+
+
+});
+
+// Add static file serving for frontend
+const frontendPath = path.join(__dirname, '..', 'v2.0', 'dist');
+app.use(express.static(frontendPath));
+
+// Add catch-all route for SPA
+app.get('*', (req, res, next) => {
+    if (req.url.startsWith('/api')) {
+        return next();
+    }
+    res.sendFile(path.join(frontendPath, 'index.html'));
+});
+
+// Update WebSocket configuration to connect to main server if this is a secondary server
+const setupWebSocket = () => {
+    const serverConfig = getServerConfig();
+
+    if (serverConfig.isMainServer) {
+        // Main server handles incoming connections
+        wss.on('connection', (ws, req) => {
+            const clientIp = getClientIp(req);
+            console.log(`Client connected from IP: ${clientIp}`);
+            // ...existing code...
+        });
+    } else {
+        // Connect to all main servers for redundancy
+        serverConfig.mainServers.forEach(mainServer => {
+            const connectToMainServer = () => {
+                const mainServerWs = new WebSocket(mainServer.url.replace('http', 'ws'));
+                // ...existing websocket setup code...
+            };
+            connectToMainServer();
+        });
+    }
+};
+// 
+// Call setupWebSocket after server starts
+setupWebSocket();
+
+module.exports = app;
