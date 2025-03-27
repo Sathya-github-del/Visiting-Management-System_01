@@ -1241,7 +1241,7 @@ server.listen(PORT, HOST, () => {
 });
 
 // Add static file serving for frontend
-const frontendPath = path.join(__dirname, '..', 'v2.0', 'dist');
+const frontendPath = path.join(__dirname, '..', 'dist');
 app.use(express.static(frontendPath));
 
 // Add catch-all route for SPA
