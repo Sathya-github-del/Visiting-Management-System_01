@@ -28,29 +28,25 @@ app.use(cors({
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
 
-        // Add development URLs
         const allowedOrigins = [
             'http://localhost:5173',
             'http://127.0.0.1:5173',
             'http://0.0.0.0:5173',
             'http://Dynvms:5173',
-            ...allowedFrontendHosts.map(host => `http://${host}:5173`),
-            ...allowedBackendHosts.map(host => `http://${host}:5173`)
+            ...allowedFrontendHosts.map(host => `http://${host}:5173`)
         ];
 
-        // In development, log the origin and allowed origins for debugging
-        console.log('Request Origin:', origin);
-        console.log('Allowed Origins:', allowedOrigins);
-
-        if (allowedOrigins.includes(origin) || process.env.DEVELOPMENT_MODE === 'true') {
+        if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
             callback(null, true);
         } else {
+            console.log('Rejected Origin:', origin);
+            console.log('Allowed Origins:', allowedOrigins);
             callback(new Error('Not allowed by CORS'));
         }
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With']
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
@@ -230,19 +226,16 @@ const getServerIPs = () => {
 
 // Add near the top with other utility functions
 const getServerConfig = () => {
-    const mainServers = (process.env.MAIN_SERVER_IP || '').split(',').map(ip => ip.trim());
-    const mainUrls = (process.env.MAIN_SERVER_URL || '').split(',').map(url => url.trim());
-
-    const isMainServer = mainServers.some(ip => getSystemIPAddresses().includes(ip) || ip === 'Dynvms');
+    const isMainServer = getSystemIPAddresses().includes(process.env.MAIN_SERVER_IP);
     const secondaryIPs = process.env.SECONDARY_IPS?.split(',') || [];
     const secondaryURLs = process.env.SECONDARY_URLS?.split(',') || [];
-
+    // Main_server_API
     return {
         isMainServer,
-        mainServers: mainServers.map((ip, index) => ({
-            ip,
-            url: mainUrls[index]
-        })),
+        mainServer: {
+            ip: process.env.MAIN_SERVER_IP,
+            url: process.env.MAIN_SERVER_URL
+        },
         secondaryServers: secondaryIPs.map((ip, index) => ({
             ip: ip.trim(),
             url: secondaryURLs[index]?.trim()
@@ -327,26 +320,34 @@ const formatDateTime = (date) => {
 };
 
 // Add this near other utility functions
-const SMS8Service = require('./sms');
-const smsService = new SMS8Service(process.env.SMS_API_KEY);
-
-// Update the sendSMS function
 const sendSMS = async (phone, message) => {
     try {
-        // Remove any spaces or special characters from phone number
-        const cleanPhone = phone.replace(/[^\d]/g, '');
-
-        console.log('Attempting to send SMS:', {
-            originalPhone: phone,
-            cleanPhone: cleanPhone,
-            messageLength: message.length
+        const apiKey = process.env.SMS_API_KEY;
+        const response = await fetch(`${process.env.SMS_API_URL}?key=${apiKey}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: new URLSearchParams({
+                phone: phone,
+                msg: message
+            })
         });
 
-        const success = await smsService.sendSMS(cleanPhone, message);
-        return success;
+        const data = await response.json();
+
+        if (data.success) {
+            console.log('SMS API Response:', JSON.stringify(data));
+            console.log('SMS notification sent to:', phone);
+            console.log('Remaining credits:', data.data.credits);
+            return true;
+        } else {
+            console.error('SMS sending failed:', data.error);
+            return false;
+        }
     } catch (error) {
-        console.error('SMS sending failed:', error.message);
-        return false;
+        console.error('Error sending SMS:', error);
+        throw error;
     }
 };
 
@@ -438,11 +439,11 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
                         (Note: Links will only work from your assigned computer IP: ${employee.ipmsg})
                     </p>
                     <div style="margin-top: 15px;">
-                        <a href="${process.env.MAIN_SERVER_URL}/api/result/approve/${visitor._id}?ip=${employee.ipmsg}" 
+                       <a href="http://dynvms:5000/api/result/approve/${visitor._id}?ip=${employee.ipmsg}"
                            style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; margin-right: 10px; border-radius: 4px;">
                            Approve Visit
                         </a>
-                        <a href="${process.env.MAIN_SERVER_URL}/api/result/reject/${visitor._id}?ip=${employee.ipmsg}" 
+                        <a href="http://dynvms:5000/api/result/reject/${visitor._id}?ip=${employee.ipmsg}"
                            style="background-color: #f44336; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">
                            Reject Visit
                         </a>
@@ -454,7 +455,7 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
                 content: photoData.data
             }] : []
         };
-
+        //
         await transporter.sendMail(mailOptions);
 
         // Broadcast to WebSocket clients
@@ -636,7 +637,7 @@ app.patch('/api/visitors/:id/status', async (req, res) => {
                 subject: `Visit Request ${status.charAt(0).toUpperCase() + status.slice(1)}`,
                 html: `
                     <h2>Visit Request ${status.charAt(0).toUpperCase() + status.slice(1)}</h2>
-                    <p>Your visit request for ${visitor.visitDate} at ${visitor.visitTime} has been ${status}.</p>
+                    <p>Your visit request for ${visitor.visitDate} at ${visitor.visitTime} has been ${status} by ${visitor.visitingMember}.</p>
                     ${status === 'approved' ? '<p>Please proceed to the reception desk at the scheduled time.</p>' : ''}
                 `
             };
@@ -915,20 +916,17 @@ app.get('/api/result/:action/:id', async (req, res) => {
         });
 
         // Send SMS notification
-        const smsMessage = `DynPro India: Your visit request for ${visitor.visitDate} has been ${status}.` +
-            (status === 'approved'
-                ? ' Please proceed to check-In.'
-                : ' Please contact the person for more information.');
+        const smsMessage = `Your visit request for ${visitor.visitDate} has been ${status} by ${visitor.visitingMember}. ${status === 'approved'
+            ? 'Please proceed to reception at the scheduled time.'
+            : 'Please contact the person for more information.'
+            }`;
 
         try {
-            const smsSent = await sendSMS(visitor.phone, smsMessage);
-            if (smsSent) {
-                console.log(`SMS notification sent successfully to: ${visitor.phone}`);
-            } else {
-                console.warn(`Failed to send SMS notification to: ${visitor.phone}`);
-            }
+            await sendSMS(visitor.phone, smsMessage);
+            console.log('SMS notification sent to:', visitor.phone);
         } catch (smsError) {
-            console.error('SMS sending error:', smsError);
+            console.error('Failed to send SMS:', smsError);
+            // Continue execution even if SMS fails
         }
 
         res.send(`
@@ -1068,20 +1066,16 @@ app.get('/api/result/:action/:id', async (req, res) => {
         });
 
         // Send SMS notification
-        const smsMessage = `DynPro India: Your visit request for ${visitor.visitDate} has been ${status}. ${status === 'approved'
-            ? 'Please proceed to reception at the scheduled time.'
+        const smsMessage = `Your visit request for ${visitor.visitDate} has been ${status}. ${status === 'approved'
+            ? 'Please proceed to checkin.'
             : 'Please contact the person for more information.'
             }`;
 
         try {
-            const smsSent = await sendSMS(visitor.phone, smsMessage);
-            if (smsSent) {
-                console.log('SMS notification sent successfully to:', visitor.phone);
-            } else {
-                console.error('Failed to send SMS notification');
-            }
+            await sendSMS(visitor.phone, smsMessage);
+            console.log('SMS notification sent to:', visitor.phone);
         } catch (smsError) {
-            console.error('SMS sending error:', smsError);
+            console.error('Failed to send SMS:', smsError);
             // Continue execution even if SMS fails
         }
 
@@ -1220,36 +1214,41 @@ const HOST = '0.0.0.0'; // Listen on all network interfaces
 // Update the server.listen section
 server.listen(PORT, HOST, () => {
     console.log(`\nServer running at http://${HOST}:${PORT}`);
-    console.log('\nServer Configuration:');
+    console.log('\nAccess Configuration:');
+    console.log('Server accessible from:');
+    console.log('- Local: http://localhost:5000');
+    console.log('- Network:', `http://${getSystemIPAddresses()[0]}:5000`);
+    // console.log('- Custom: http://Dynvms:5000`);
+
+    console.log('\nAllowed IPs:', [...new Set([...allowedFrontendHosts, ...allowedBackendHosts])].join(', '));
 
     const serverConfig = getServerConfig();
+    console.log('\nServer Configuration:');
+
     if (serverConfig.isMainServer) {
         console.log('Running as MAIN SERVER');
-        console.log('Main Servers:');
-        serverConfig.mainServers.forEach(server => {
-            console.log(`- ${server.ip} -> ${server.url}`);
+        console.log(`Main Server IP: ${serverConfig.mainServer.ip}`);
+        console.log(`Main Server URL: ${serverConfig.mainServer.url}`);
+        console.log('\nConnected Secondary Servers:');
+        serverConfig.secondaryServers.forEach(server => {
+            console.log(`${server.ip} -> ${server.url}`);
         });
     } else {
         console.log('Running as SECONDARY SERVER');
-        console.log('Connected to Main Servers:');
-        serverConfig.mainServers.forEach(server => {
-            console.log(`- ${server.url}`);
+        console.log(`Main Server: ${serverConfig.mainServer.url}`);
+        console.log(`Current Server IP: ${getSystemIPAddresses()[0]}`);
+    }
+
+    // Log network interfaces
+    console.log('\nAvailable Network Interfaces:');
+    const networkInterfaces = require('os').networkInterfaces();
+    Object.keys(networkInterfaces).forEach((interfaceName) => {
+        networkInterfaces[interfaceName].forEach((interface) => {
+            if (interface.family === 'IPv4') {
+                console.log(`${interfaceName}: ${interface.address}`);
+            }
         });
-    }
-
-
-});
-
-// Add static file serving for frontend
-const frontendPath = path.join(__dirname, 'v2.0', 'dist');
-app.use(express.static(frontendPath));
-
-// Add catch-all route for SPA
-app.get('*', (req, res, next) => {
-    if (req.url.startsWith('/api')) {
-        return next();
-    }
-    res.sendFile(path.join(frontendPath, 'index.html'));
+    });
 });
 
 // Update WebSocket configuration to connect to main server if this is a secondary server
@@ -1261,20 +1260,68 @@ const setupWebSocket = () => {
         wss.on('connection', (ws, req) => {
             const clientIp = getClientIp(req);
             console.log(`Client connected from IP: ${clientIp}`);
-            // ...existing code...
+
+            ws.on('message', (data) => {
+                try {
+                    const message = JSON.parse(data);
+                    if (message.type === 'SERVER_REGISTRATION') {
+                        console.log(`Secondary server registered: ${message.ip}`);
+                    }
+                } catch (error) {
+                    console.error('Error processing WebSocket message:', error);
+                }
+            });
         });
     } else {
-        // Connect to all main servers for redundancy
-        serverConfig.mainServers.forEach(mainServer => {
-            const connectToMainServer = () => {
-                const mainServerWs = new WebSocket(mainServer.url.replace('http', 'ws'));
-                // ...existing websocket setup code...
-            };
-            connectToMainServer();
-        });
+        // Secondary servers connect to main server
+        const connectToMainServer = () => {
+            // Ensure we have a valid WebSocket URL
+            let mainServerWsUrl;
+            try {
+                const url = new URL(serverConfig.mainServer.url);
+                mainServerWsUrl = `ws://${url.hostname}:${url.port}`;
+            } catch (error) {
+                console.error('Invalid main server URL:', error);
+                return;
+            }
+
+            console.log('Attempting to connect to main server at:', mainServerWsUrl);
+            const mainServerWs = new WebSocket(mainServerWsUrl);
+
+            mainServerWs.on('open', () => {
+                console.log('Connected to main server:', mainServerWsUrl);
+                mainServerWs.send(JSON.stringify({
+                    type: 'SERVER_REGISTRATION',
+                    ip: getSystemIPAddresses()[0]
+                }));
+            });
+
+            mainServerWs.on('message', (data) => {
+                try {
+                    const message = JSON.parse(data);
+                    if (message.type === 'BROADCAST') {
+                        broadcastUpdate(message.data);
+                    }
+                } catch (error) {
+                    console.error('Error processing message from main server:', error);
+                }
+            });
+
+            mainServerWs.on('close', () => {
+                console.log('Disconnected from main server, attempting to reconnect...');
+                setTimeout(connectToMainServer, Number(process.env.WS_RECONNECT_INTERVAL || 5000));
+            });
+
+            mainServerWs.on('error', (error) => {
+                console.error('WebSocket error:', error);
+            });
+        };
+
+        // Initial connection
+        connectToMainServer();
     }
 };
-// 
+
 // Call setupWebSocket after server starts
 setupWebSocket();
 

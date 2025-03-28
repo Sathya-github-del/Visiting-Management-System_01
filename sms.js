@@ -22,6 +22,7 @@ class SMS8Service {
                 msg: message,
                 return: 'json'
             };
+            //
 
             console.log('Sending SMS with payload:', {
                 ...payload,
